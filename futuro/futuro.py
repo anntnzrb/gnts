@@ -425,7 +425,7 @@ def main():
         description="Sports Table Extractor - Extract league table data from images",
         epilog="Example: uv run futuro.py table_image.png",
     )
-    parser.add_argument("image_path", help="Path to the sports table image file")
+    parser.add_argument("image_paths", nargs="+", help="Path(s) to the sports table image file(s)")
     parser.add_argument(
         "-v",
         "--verbose",
@@ -435,33 +435,44 @@ def main():
 
     args = parser.parse_args()
 
-    image_path = Path(args.image_path)
-    if not image_path.exists():
-        console.print(f"[red]Error: Image file '{args.image_path}' not found[/red]")
-        sys.exit(1)
-
-    if image_path.suffix.lower() != ".png":
-        console.print(
-            f"[red]Error: Only PNG files are supported. Got '{image_path.suffix}'[/red]"
-        )
-        sys.exit(1)
+    # Validate all image paths first
+    image_paths = []
+    for path_str in args.image_paths:
+        image_path = Path(path_str)
+        if not image_path.exists():
+            console.print(f"[red]Error: Image file '{path_str}' not found[/red]")
+            sys.exit(1)
+        if image_path.suffix.lower() != ".png":
+            console.print(
+                f"[red]Error: Only PNG files are supported. Got '{image_path.suffix}' for '{path_str}'[/red]"
+            )
+            sys.exit(1)
+        image_paths.append(image_path)
 
     api_key = validate_environment()
 
     try:
         extractor = SportsTableExtractor(api_key=api_key)
-
-        console.print(f"[cyan]Processing image: {args.image_path}[/cyan]\n")
-        console.print("[yellow]📋 Two-step process: Extract → Reflect[/yellow]")
-        data, reflection = extractor.extract_data(str(image_path), verbose=args.verbose)
-
-        display_results(data, reflection)
-
-        output_path = f"{image_path.stem}_extracted.json"
-        extractor.save_to_file(data, output_path)
-
+        
+        console.print(f"[cyan]Processing {len(image_paths)} image(s) sequentially...[/cyan]\n")
+        
+        for i, image_path in enumerate(image_paths, 1):
+            console.print(f"[bold blue]--- Processing Image {i}/{len(image_paths)}: {image_path.name} ---[/bold blue]")
+            console.print("[yellow]📋 Two-step process: Extract → Reflect[/yellow]")
+            
+            data, reflection = extractor.extract_data(str(image_path), verbose=args.verbose)
+            
+            display_results(data, reflection)
+            
+            output_path = f"{image_path.stem}_extracted.json"
+            extractor.save_to_file(data, output_path)
+            
+            console.print(
+                f"[bold green]✅ Image {i}/{len(image_paths)} completed: {len(data.teams)} teams extracted![/bold green]\n"
+            )
+        
         console.print(
-            f"[bold green]🎉 Successfully extracted {len(data.teams)} teams with reflection analysis![/bold green]"
+            f"[bold green]🎉 All {len(image_paths)} images processed successfully![/bold green]"
         )
         return 0
 
@@ -482,7 +493,8 @@ if __name__ == "__main__":
                 "[bold]Sports Table Extractor[/bold]\n\n"
                 "Extract football league table data from images to structured JSON\n\n"
                 "[yellow]Usage:[/yellow]\n"
-                "  uv run futuro.py image.png\n\n"
+                "  uv run futuro.py image1.png\n"
+                "  uv run futuro.py image1.png image2.png image3.png\n\n"
                 "[yellow]Setup:[/yellow]\n"
                 "  export GEMINI_API_KEY='your-api-key-here'\n"
                 "  Get key from: https://aistudio.google.com/apikey",
