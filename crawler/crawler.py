@@ -11,7 +11,6 @@
 
 import argparse
 import asyncio
-import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -379,21 +378,75 @@ async def crawl_sitemap_urls(
 
 
 def save_results(results: List[CrawlResult], output_path: str) -> None:
-    """Save crawl results to JSON file."""
-    output_data = {
-        "results": [result.model_dump() for result in results],
-        "stats": calculate_stats(results).model_dump(),
-    }
+    """Save crawl results to XML file."""
+    stats = calculate_stats(results)
+
+    # Create root element
+    root = ET.Element("crawl_results")
+
+    # Add stats as attributes
+    stats_elem = ET.SubElement(root, "stats")
+    stats_elem.set("total_urls", str(stats.total_urls))
+    stats_elem.set("successful", str(stats.successful))
+    stats_elem.set("failed", str(stats.failed))
+    stats_elem.set("total_chunks", str(stats.total_chunks))
+    stats_elem.set("processing_time", str(stats.processing_time))
+
+    # Add results
+    for result in results:
+        result_elem = ET.SubElement(root, "result")
+        result_elem.set("url", result.url)
+        result_elem.set("success", str(result.success).lower())
+
+        # Add title
+        if result.title:
+            title_elem = ET.SubElement(result_elem, "title")
+            title_elem.text = result.title
+
+        # Add error if present
+        if result.error:
+            error_elem = ET.SubElement(result_elem, "error")
+            error_elem.text = result.error
+
+        # Add metadata
+        if result.metadata:
+            metadata_elem = ET.SubElement(result_elem, "metadata")
+            for key, value in result.metadata.items():
+                metadata_elem.set(key, str(value))
+
+        # Add markdown content
+        if result.markdown:
+            markdown_elem = ET.SubElement(result_elem, "markdown")
+            markdown_elem.text = result.markdown
+
+        # Add chunks
+        for chunk in result.chunks:
+            chunk_elem = ET.SubElement(result_elem, "chunk")
+            chunk_elem.set("position", str(chunk.position))
+            chunk_elem.set("char_count", str(chunk.char_count))
+            chunk_elem.set("word_count", str(chunk.word_count))
+
+            # Add headers
+            if chunk.headers:
+                headers_elem = ET.SubElement(chunk_elem, "headers")
+                for header in chunk.headers:
+                    header_elem = ET.SubElement(headers_elem, "header")
+                    header_elem.text = header
+
+            # Add text content
+            text_elem = ET.SubElement(chunk_elem, "text")
+            text_elem.text = chunk.text
+
+    # Write to file
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ", level=0)  # Pretty print
 
     try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        tree.write(output_path, encoding="utf-8", xml_declaration=True)
         console.print(f"[green]Results saved to: {output_path}[/green]")
-    except UnicodeEncodeError:
-        # Fallback to ASCII-safe encoding
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=True)
-        console.print(f"[green]Results saved to: {output_path} (ASCII mode)[/green]")
+    except Exception as e:
+        console.print(f"[red]Error saving XML: {e}[/red]")
+        raise
 
 
 def calculate_stats(results: List[CrawlResult]) -> CrawlStats:
@@ -481,7 +534,7 @@ async def main():
         help="Maximum chunk size in characters (default: 1000)",
     )
     parser.add_argument(
-        "--output", "-o", help="Output JSON file path (default: auto-generated)"
+        "--output", "-o", help="Output XML file path (default: auto-generated)"
     )
     parser.add_argument(
         "--quiet", "-q", action="store_true", help="Suppress detailed output"
@@ -543,7 +596,7 @@ async def main():
             output_path = args.output
         else:
             domain = urlparse(args.url).netloc or "crawl"
-            output_path = f"{domain}_{strategy.value}_results.json"
+            output_path = f"{domain}_{strategy.value}_results.xml"
 
         save_results(results, output_path)
 
