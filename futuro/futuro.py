@@ -130,18 +130,18 @@ Step-by-step process:
 After your analysis, provide the JSON in this format:
 ```json
 {{
-  "country": "italy",
-  "match_type": "all",
-  "time_period": "current", 
+  "country": string,
+  "match_type": string,
+  "time_period": string, 
   "teams": [
     {{
       "team": "Team Name",
-      "games": 38,
-      "goal_diff": 44,
-      "xG": 71.7,
-      "xGA": 41.3,
-      "net_xG": 30.4,
-      "xG_pts": 71
+      "games": number,
+      "goal_diff": number,
+      "xG": number,
+      "xGA": number,
+      "net_xG": number,
+      "xG_pts": number
     }}
   ]
 }}
