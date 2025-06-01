@@ -22,7 +22,7 @@ Features:
 - Rich console output with confidence scores
 
 Usage: 
-    uv run futuro.py image1.png image2.png
+    uv run futuro.py image1.png image2.png image3.png
 """
 
 import argparse
@@ -295,12 +295,6 @@ Provide assessment:
 
         raise json.JSONDecodeError("No valid JSON found", text, 0)
 
-    def save_to_file(self, data: SportsTableData, output_path: str) -> None:
-        Path(output_path).write_text(
-            json.dumps(data.model_dump(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        console.print(f"[green]Saved: {output_path}[/green]")
 
     def save_consolidated_to_file(
         self, data: ConsolidatedOutput, output_path: str
@@ -336,58 +330,32 @@ Provide assessment:
             raise ValueError("No extractions provided")
 
         country = extractions[0].country
-        for extraction in extractions:
-            if extraction.country != country:
-                raise ValueError(
-                    f"Mixed countries found: {country} vs {extraction.country}"
-                )
+        if any(e.country != country for e in extractions):
+            mixed = next(e.country for e in extractions if e.country != country)
+            raise ValueError(f"Mixed countries found: {country} vs {mixed}")
 
-        # Group extractions by match_type for easier processing
-        extractions_by_type = {"all": None, "home": None, "away": None}
-        for extraction in extractions:
-            extractions_by_type[extraction.match_type] = extraction
+        extractions_by_type = {e.match_type: e for e in extractions}
 
-        # Process team data from each match type
+        all_teams = {team.team for extraction in extractions for team in extraction.teams}
         team_performances = {}
 
-        # Get the union of all team names across all extractions
-        all_teams = set()
-        for extraction in extractions:
-            for team_data in extraction.teams:
-                all_teams.add(team_data.team)
-
-        # Create team performance data for each team
+        default_stats = TeamStats(games=0, goal_diff=0, xG=0.0, xGA=0.0, net_xG=0.0, xG_pts=0)
+        
         for team_name in all_teams:
-            # Initialize with default values - create new instances for each team
-            all_stats = TeamStats(games=0, goal_diff=0, xG=0.0, xGA=0.0, net_xG=0.0, xG_pts=0)
-            home_stats = TeamStats(games=0, goal_diff=0, xG=0.0, xGA=0.0, net_xG=0.0, xG_pts=0)
-            away_stats = TeamStats(games=0, goal_diff=0, xG=0.0, xGA=0.0, net_xG=0.0, xG_pts=0)
-
-            # Update with actual data if available
+            stats = {"all": default_stats, "home": default_stats, "away": default_stats}
+            
             for match_type, extraction in extractions_by_type.items():
-                if extraction:
-                    for team_data in extraction.teams:
-                        if team_data.team == team_name:
-                            team_stats = TeamStats(
-                                games=team_data.games,
-                                goal_diff=team_data.goal_diff,
-                                xG=team_data.xG,
-                                xGA=team_data.xGA,
-                                net_xG=team_data.net_xG,
-                                xG_pts=team_data.xG_pts,
-                            )
-
-                            if match_type == "all":
-                                all_stats = team_stats
-                            elif match_type == "home":
-                                home_stats = team_stats
-                            elif match_type == "away":
-                                away_stats = team_stats
-
-            # Add team performance data
-            team_performances[team_name] = TeamPerformance(
-                all=all_stats, home=home_stats, away=away_stats
-            )
+                if extraction and (team_data := next((t for t in extraction.teams if t.team == team_name), None)):
+                    stats[match_type] = TeamStats(
+                        games=team_data.games,
+                        goal_diff=team_data.goal_diff,
+                        xG=team_data.xG,
+                        xGA=team_data.xGA,
+                        net_xG=team_data.net_xG,
+                        xG_pts=team_data.xG_pts,
+                    )
+            
+            team_performances[team_name] = TeamPerformance(**stats)
 
         metadata = ConsolidatedMetadata(
             timestamp=datetime.now().isoformat(),
@@ -415,42 +383,6 @@ def validate_environment() -> str:
     sys.exit(1)
 
 
-def display_results(data: SportsTableData, reflection: ReflectionResult) -> None:
-    """Display extraction results with rich formatting in the console."""
-    summary = (
-        f"Country: {data.country} | Type: {data.match_type} | Teams: {len(data.teams)}"
-    )
-    console.print(Panel(summary, title="📊 Summary", border_style="blue"))
-
-    accuracy_color = "green" if reflection.is_accurate else "red"
-    confidence_color = (
-        "green"
-        if reflection.confidence_score > 0.8
-        else "yellow"
-        if reflection.confidence_score > 0.6
-        else "red"
-    )
-
-    reflection_summary = f"Accuracy: [{accuracy_color}]{'✓' if reflection.is_accurate else '✗'}[/{accuracy_color}] | Confidence: [{confidence_color}]{reflection.confidence_score:.1%}[/{confidence_color}]\n{reflection.final_assessment}"
-    console.print(Panel(reflection_summary, title="🔍 Analysis", border_style="cyan"))
-
-    if reflection.issues_found:
-        console.print(
-            Panel(
-                "\n".join(f"• {i}" for i in reflection.issues_found),
-                title="⚠️ Issues",
-                border_style="yellow",
-            )
-        )
-
-    if reflection.suggested_corrections:
-        console.print(
-            Panel(
-                "\n".join(f"• {s}" for s in reflection.suggested_corrections),
-                title="💡 Fixes",
-                border_style="magenta",
-            )
-        )
 
 
 def main() -> int:
@@ -461,7 +393,7 @@ def main() -> int:
     """
     parser = argparse.ArgumentParser(
         description="Sports Table Extractor - Extract league table data from images",
-        epilog="Example: uv run futuro.py table_image.png",
+        epilog="Example: uv run futuro.py italy-all.png italy-home.png italy-away.png",
     )
     parser.add_argument(
         "image_paths", nargs="+", help="Path(s) to the sports table image file(s)"
@@ -481,13 +413,10 @@ def main() -> int:
 
     try:
         extractor = SportsTableExtractor(api_key=validate_environment())
-        console.print(
-            f"[cyan]Processing {len(image_paths)} image{'s' if len(image_paths) > 1 else ''}...[/cyan]"
-        )
-
-        if len(image_paths) > 1:
-            for i, path in enumerate(image_paths, 1):
-                console.print(f"  {i}. {path.name}")
+        console.print(f"[cyan]Processing {len(image_paths)} image{'s' if len(image_paths) > 1 else ''}...[/cyan]")
+        
+        for i, path in enumerate(image_paths, 1):
+            console.print(f"  {i}. {path.name}")
 
         def process_image(path: Path) -> Tuple[Path, SportsTableData, ReflectionResult]:
             console.print(f"[blue]Processing: {path.name}[/blue]")
@@ -495,45 +424,31 @@ def main() -> int:
             console.print(f"[green]✅ {path.name} ({len(data.teams)} teams)[/green]")
             return path, data, reflection
 
-        if len(image_paths) == 1:
-            results = [process_image(image_paths[0])]
-        else:
-            results = []
-            with ThreadPoolExecutor(max_workers=min(len(image_paths), 4)) as executor:
-                future_to_path = {
-                    executor.submit(process_image, path): path for path in image_paths
-                }
-                for future in as_completed(future_to_path):
-                    try:
-                        results.append(future.result())
-                    except Exception as e:
-                        console.print(
-                            f"[red]❌ {future_to_path[future].name}: {e}[/red]"
-                        )
+        results = []
+        with ThreadPoolExecutor(max_workers=min(len(image_paths), 4)) as executor:
+            future_to_path = {
+                executor.submit(process_image, path): path for path in image_paths
+            }
+            for future in as_completed(future_to_path):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    console.print(
+                        f"[red]❌ {future_to_path[future].name}: {e}[/red]"
+                    )
 
-        total_teams = sum(len(data.teams) for _, data, _ in results)
+        console.print("\n[cyan]📊 Creating consolidated output...[/cyan]")
+        extractions = [data for _, data, _ in results]
+        consolidated = extractor.consolidate_extractions(extractions)
+        consolidated_path = f"{extractions[0].country}.json"
+        extractor.save_consolidated_to_file(consolidated, consolidated_path)
 
-        if len(results) == 1:
-            path, data, reflection = results[0]
-            extractor.save_to_file(data, f"{data.country}-{data.match_type}.json")
-            console.print(f"[green]🎉 Extracted {total_teams} teams![/green]")
-            display_results(data, reflection)
-        else:
-            console.print("\n[cyan]📊 Creating consolidated output...[/cyan]")
-            extractions = [data for _, data, _ in results]
-            consolidated = extractor.consolidate_extractions(extractions)
-            consolidated_path = f"{extractions[0].country}.json"
-            extractor.save_consolidated_to_file(consolidated, consolidated_path)
-
-            console.print("\n[cyan]📊 Summary:[/cyan]")
-            for path, data, _ in results:
-                console.print(f"• {path.name}: {len(data.teams)} teams")
-            console.print(
-                f"\n[green]🎉 Processed {len(results)} images, {total_teams} total teams![/green]"
-            )
-            console.print(
-                f"[green]Consolidated data saved to: {consolidated_path}[/green]"
-            )
+        total_teams = sum(len(data.teams) for data in extractions)
+        console.print("\n[cyan]📊 Summary:[/cyan]")
+        for path, data, _ in results:
+            console.print(f"• {path.name}: {len(data.teams)} teams")
+        console.print(f"\n[green]🎉 Processed {len(results)} images, {total_teams} total teams![/green]")
+        console.print(f"[green]Consolidated data saved to: {consolidated_path}[/green]")
         return 0
 
     except Exception as e:
@@ -551,7 +466,7 @@ if __name__ == "__main__":
             Panel(
                 "[bold]Sports Table Extractor[/bold]\n\n"
                 "Extract league table data from images\n\n"
-                "[yellow]Usage:[/yellow] uv run futuro.py image.png\n"
+                "[yellow]Usage:[/yellow] uv run futuro.py images/*.png\n"
                 "[yellow]Setup:[/yellow] export GEMINI_API_KEY='key'\n"
                 "Get key: https://aistudio.google.com/apikey",
                 title="🏆 Futuro",
