@@ -6,7 +6,24 @@
 # ]
 # ///
 
-"""Sports Table Extractor - Advanced image analysis agent for extracting football league table data."""
+"""
+Sports Table Extractor - Advanced image analysis agent for extracting football league table data.
+
+This single-file agent uses Google's Gemini AI model to extract structured data from images of
+football league tables, focusing specifically on the last 10 games performance statistics.
+The tool processes images with the naming format '{country}-{match_type}.png' and extracts
+performance metrics like expected goals (xG) and other advanced statistics.
+
+Features:
+- Two-phase extraction: data extraction followed by self-validation
+- Multi-image processing with consolidated output
+- Support for different match types (all/home/away)
+- Advanced error handling and reflection capabilities
+- Rich console output with confidence scores
+
+Usage: 
+    uv run futuro.py image1.png image2.png
+"""
 
 import argparse
 import base64
@@ -30,6 +47,7 @@ TEMPERATURE = 0.1
 
 
 class TeamData(BaseModel):
+    """Team performance data for the last 10 matches."""
     team: str = Field(description="Team name")
     games: int = Field(description="Games played")
     goal_diff: int = Field(description="Goal difference")
@@ -40,11 +58,9 @@ class TeamData(BaseModel):
 
 
 class SportsTableData(BaseModel):
+    """Sports table data extracted from an image, containing team performance data for the last 10 matches."""
     country: str = Field(description="Country/league (e.g., italy, spain, england)")
     match_type: str = Field(default="all", description="Match type: all, home, or away")
-    time_period: str = Field(
-        default="current", description="Time period: current, last5, last10, etc."
-    )
     teams: list[TeamData] = Field(description="List of team data")
 
     @field_validator("teams")
@@ -55,6 +71,7 @@ class SportsTableData(BaseModel):
 
 
 class ReflectionResult(BaseModel):
+    """Self-reflection assessment on the quality of the data extraction."""
     is_accurate: bool = Field(description="Whether extraction appears accurate")
     confidence_score: float = Field(
         ge=0, le=1, description="Confidence in extraction (0-1)"
@@ -69,6 +86,7 @@ class ReflectionResult(BaseModel):
 
 
 class TeamStats(BaseModel):
+    """Team performance statistics for a specific match type."""
     games: int = Field(description="Games played")
     goal_diff: int = Field(description="Goal difference")
     xG: float = Field(description="Expected Goals")
@@ -78,31 +96,32 @@ class TeamStats(BaseModel):
 
 
 class TeamPerformance(BaseModel):
-    all: dict[str, TeamStats] = Field(
-        description="All matches performance by time period"
-    )
-    home: dict[str, TeamStats] = Field(
-        description="Home matches performance by time period"
-    )
-    away: dict[str, TeamStats] = Field(
-        description="Away matches performance by time period"
-    )
+    """Team performance across different match types (all, home, away)."""
+    all: TeamStats = Field(description="All matches performance")
+    home: TeamStats = Field(description="Home matches performance")
+    away: TeamStats = Field(description="Away matches performance")
 
 
 class ConsolidatedMetadata(BaseModel):
+    """Metadata for consolidated output, including extraction timestamp and field definitions."""
     timestamp: str = Field(description="Extraction timestamp")
     country: str = Field(description="Country/league identifier")
     definitions: dict = Field(description="Field definitions and explanations")
 
 
 class ConsolidatedOutput(BaseModel):
+    """Consolidated output combining data from multiple extractions."""
     metadata: ConsolidatedMetadata = Field(description="Extraction metadata")
-    data: dict[str, dict[str, TeamPerformance]] = Field(
-        description="Team performance data"
-    )
+    data: dict[str, TeamPerformance] = Field(description="Team performance data indexed by team name")
 
 
 class SportsTableExtractor:
+    """Core extraction engine for processing sports table images using Gemini AI.
+    
+    This class handles the image analysis, data extraction, and validation workflow,
+    leveraging Google's Gemini 2.5 Pro model for image understanding.
+    """
+    
     def __init__(self, api_key: Optional[str] = None):
         if api_key:
             os.environ["GEMINI_API_KEY"] = api_key
@@ -117,6 +136,10 @@ class SportsTableExtractor:
         )
 
     def _detect_mime_type(self, image_path: str) -> str:
+        """Detect the MIME type of an image file.
+        
+        Currently only supports PNG files.
+        """
         if Path(image_path).suffix.lower() != ".png":
             raise ValueError(
                 f"Only PNG files supported. Got '{Path(image_path).suffix}'"
@@ -127,11 +150,11 @@ class SportsTableExtractor:
         context = ""
         if filename_info:
             context = f"""<filename_context>
-Filename suggests: Country={filename_info.get("country", "unknown")}, Type={filename_info.get("match_type", "unknown")}, Period={filename_info.get("time_period", "unknown")}
+Filename suggests: Country={filename_info.get("country", "unknown")}, Type={filename_info.get("match_type", "unknown")}
 </filename_context>
 """
 
-        return f"""<purpose>Extract sports table data to JSON.</purpose>
+        return f"""<purpose>Extract sports table data (last 10 games) to JSON.</purpose>
 {context}
 <instructions>
 Analyze step-by-step, then provide JSON:
@@ -141,12 +164,13 @@ Analyze step-by-step, then provide JSON:
 
 JSON format:
 ```json
-{{"country": string, "match_type": string, "time_period": string, "teams": [{{"team": string, "games": int, "goal_diff": int, "xG": float, "xGA": float, "net_xG": float, "xG_pts": int}}]}}
+{{"country": string, "match_type": string, "teams": [{{"team": string, "games": int, "goal_diff": int, "xG": float, "xGA": float, "net_xG": float, "xG_pts": int}}]}}
 ```
 </instructions>
 
 <requirements>
-- country/match_type/time_period from filename, NOT image
+- country/match_type from filename, NOT image
+- Data should represent LAST 10 GAMES only
 - Exact team order and names
 - Correct data types
 - Use null for missing fields
@@ -191,7 +215,7 @@ Validate step-by-step:
 2. Check team names, numbers, order
 3. Verify completeness
 
-Note: country/match_type/time_period from filename (not image) - don't flag as issues.
+Note: country/match_type from filename (not image) - don't flag as issues. All data should be for last 10 games only.
 
 Provide assessment:
 ```json
@@ -200,14 +224,13 @@ Provide assessment:
 </instructions>"""
 
     def _parse_filename(self, image_path: str) -> dict:
-        parts = Path(image_path).stem.split("_")
+        parts = Path(image_path).stem.split("-")
         return (
             {
                 "country": parts[0].lower(),
-                "match_type": parts[1].lower(),
-                "time_period": parts[2].lower(),
+                "match_type": parts[1].lower() if len(parts) >= 2 else "all",
             }
-            if len(parts) >= 3
+            if parts
             else {}
         )
 
@@ -291,23 +314,18 @@ Provide assessment:
     def _create_metadata_definitions(self) -> dict:
         """Create the definitions section for metadata."""
         return {
-            "time_periods": {
-                "current": "Full season statistics",
-                "last5": "Statistics from the last 5 games played",
-                "last10": "Statistics from the last 10 games played",
-            },
             "match_types": {
                 "all": "All matches (home and away combined)",
                 "home": "Home matches only",
                 "away": "Away matches only",
             },
             "statistics": {
-                "games": "Number of games played",
-                "goal_diff": "Goal difference (goals scored minus goals conceded)",
-                "xG": "Expected Goals - likelihood of scoring based on shot quality",
-                "xGA": "Expected Goals Against - likelihood of conceding based on shots faced",
-                "net_xG": "Net Expected Goals (xG minus xGA)",
-                "xG_pts": "Expected Goal Points - points a team would have based on xG performance",
+                "games": "Number of games played in last 10 matches",
+                "goal_diff": "Goal difference in last 10 matches (goals scored minus goals conceded)",
+                "xG": "Expected Goals in last 10 matches - likelihood of scoring based on shot quality",
+                "xGA": "Expected Goals Against in last 10 matches - likelihood of conceding based on shots faced",
+                "net_xG": "Net Expected Goals in last 10 matches (xG minus xGA)",
+                "xG_pts": "Expected Goal Points in last 10 matches - points a team would have based on xG performance",
             },
         }
 
@@ -324,34 +342,52 @@ Provide assessment:
                     f"Mixed countries found: {country} vs {extraction.country}"
                 )
 
-        teams_data = {}
+        # Group extractions by match_type for easier processing
+        extractions_by_type = {"all": None, "home": None, "away": None}
+        for extraction in extractions:
+            extractions_by_type[extraction.match_type] = extraction
 
+        # Process team data from each match type
+        team_performances = {}
+
+        # Get the union of all team names across all extractions
+        all_teams = set()
         for extraction in extractions:
             for team_data in extraction.teams:
-                team_name = team_data.team
+                all_teams.add(team_data.team)
 
-                if team_name not in teams_data:
-                    teams_data[team_name] = {"all": {}, "home": {}, "away": {}}
+        # Create team performance data for each team
+        for team_name in all_teams:
+            # Initialize with default values - create new instances for each team
+            all_stats = TeamStats(games=0, goal_diff=0, xG=0.0, xGA=0.0, net_xG=0.0, xG_pts=0)
+            home_stats = TeamStats(games=0, goal_diff=0, xG=0.0, xGA=0.0, net_xG=0.0, xG_pts=0)
+            away_stats = TeamStats(games=0, goal_diff=0, xG=0.0, xGA=0.0, net_xG=0.0, xG_pts=0)
 
-                team_stats = TeamStats(
-                    games=team_data.games,
-                    goal_diff=team_data.goal_diff,
-                    xG=team_data.xG,
-                    xGA=team_data.xGA,
-                    net_xG=team_data.net_xG,
-                    xG_pts=team_data.xG_pts,
-                )
+            # Update with actual data if available
+            for match_type, extraction in extractions_by_type.items():
+                if extraction:
+                    for team_data in extraction.teams:
+                        if team_data.team == team_name:
+                            team_stats = TeamStats(
+                                games=team_data.games,
+                                goal_diff=team_data.goal_diff,
+                                xG=team_data.xG,
+                                xGA=team_data.xGA,
+                                net_xG=team_data.net_xG,
+                                xG_pts=team_data.xG_pts,
+                            )
 
-                teams_data[team_name][extraction.match_type][extraction.time_period] = (
-                    team_stats
-                )
+                            if match_type == "all":
+                                all_stats = team_stats
+                            elif match_type == "home":
+                                home_stats = team_stats
+                            elif match_type == "away":
+                                away_stats = team_stats
 
-        team_performances = {
-            team_name: TeamPerformance(
-                all=team_data["all"], home=team_data["home"], away=team_data["away"]
+            # Add team performance data
+            team_performances[team_name] = TeamPerformance(
+                all=all_stats, home=home_stats, away=away_stats
             )
-            for team_name, team_data in teams_data.items()
-        }
 
         metadata = ConsolidatedMetadata(
             timestamp=datetime.now().isoformat(),
@@ -359,10 +395,11 @@ Provide assessment:
             definitions=self._create_metadata_definitions(),
         )
 
-        return ConsolidatedOutput(metadata=metadata, data={"teams": team_performances})
+        return ConsolidatedOutput(metadata=metadata, data=team_performances)
 
 
 def validate_environment() -> str:
+    """Validate environment variables and return API key if available."""
     if api_key := os.getenv("GEMINI_API_KEY"):
         return api_key
 
@@ -379,7 +416,10 @@ def validate_environment() -> str:
 
 
 def display_results(data: SportsTableData, reflection: ReflectionResult) -> None:
-    summary = f"Country: {data.country} | Type: {data.match_type} | Period: {data.time_period} | Teams: {len(data.teams)}"
+    """Display extraction results with rich formatting in the console."""
+    summary = (
+        f"Country: {data.country} | Type: {data.match_type} | Teams: {len(data.teams)}"
+    )
     console.print(Panel(summary, title="📊 Summary", border_style="blue"))
 
     accuracy_color = "green" if reflection.is_accurate else "red"
@@ -413,7 +453,12 @@ def display_results(data: SportsTableData, reflection: ReflectionResult) -> None
         )
 
 
-def main():
+def main() -> int:
+    """Process sports table images and extract structured data using Gemini AI.
+    
+    Returns:
+        int: Exit code (0 for success, 1 for error)
+    """
     parser = argparse.ArgumentParser(
         description="Sports Table Extractor - Extract league table data from images",
         epilog="Example: uv run futuro.py table_image.png",
@@ -470,7 +515,7 @@ def main():
 
         if len(results) == 1:
             path, data, reflection = results[0]
-            extractor.save_to_file(data, f"{path.stem}_extracted.json")
+            extractor.save_to_file(data, f"{data.country}-{data.match_type}.json")
             console.print(f"[green]🎉 Extracted {total_teams} teams![/green]")
             display_results(data, reflection)
         else:
