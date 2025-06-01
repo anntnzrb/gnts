@@ -94,92 +94,46 @@ class SportsTableExtractor:
 
     def _detect_mime_type(self, image_path: str) -> str:
         """Detect MIME type from file extension."""
-        extension = Path(image_path).suffix.lower()
-        if extension != ".png":
-            raise ValueError(f"Only PNG files are supported. Got '{extension}'")
+        if Path(image_path).suffix.lower() != ".png":
+            raise ValueError(
+                f"Only PNG files supported. Got '{Path(image_path).suffix}'"
+            )
         return "image/png"
 
     def _create_extraction_prompt(self, filename_info: dict) -> str:
-        """Create the comprehensive extraction prompt with filename context."""
-        context_info = ""
+        """Create extraction prompt with filename context."""
+        context = ""
         if filename_info:
-            context_info = f"""
-<filename_context>
-Image filename suggests:
-- Country/League: {filename_info.get("country", "unknown")}
-- Match Type: {filename_info.get("match_type", "unknown")}
-- Time Period: {filename_info.get("time_period", "unknown")}
-Use this information to help validate your extraction.
+            context = f"""<filename_context>
+Filename suggests: Country={filename_info.get("country", "unknown")}, Type={filename_info.get("match_type", "unknown")}, Period={filename_info.get("time_period", "unknown")}
 </filename_context>
 """
 
-        return f"""<purpose>
-You are a data extraction specialist. Analyze this image of a sports league table and convert it to structured JSON data.
-</purpose>
-{context_info}
+        return f"""<purpose>Extract sports table data to JSON.</purpose>
+{context}
 <instructions>
-First, think through your analysis step by step, showing your reasoning process. Then provide the final JSON.
+Analyze step-by-step, then provide JSON:
+1. Identify columns and teams
+2. Extract data systematically
+3. Verify extraction
 
-Step-by-step process:
-1. **Initial Image Analysis** - Describe what you see in the image
-2. **Context Validation** - Check if filename context matches what you see
-3. **Column Identification** - List the column headers you can identify
-4. **Team Recognition** - Note the teams and their order
-5. **Data Extraction** - Go through each team systematically
-6. **Quality Check** - Verify your extraction makes sense
-
-After your analysis, provide the JSON in this format:
+JSON format:
 ```json
-{{
-  "country": string,
-  "match_type": string,
-  "time_period": string, 
-  "teams": [
-    {{
-      "team": "Team Name",
-      "games": number,
-      "goal_diff": number,
-      "xG": number,
-      "xGA": number,
-      "net_xG": number,
-      "xG_pts": number
-    }}
-  ]
-}}
+{{"country": string, "match_type": string, "time_period": string, "teams": [{{"team": string, "games": int, "goal_diff": int, "xG": float, "xGA": float, "net_xG": float, "xG_pts": int}}]}}
 ```
 </instructions>
 
-<data_fields>
-Extract these key columns (may have different labels):
-- Country/League: Identify from team names or context (italy, spain, england, etc.)
-- Match Type: all, home, away (IMPORTANT: This comes from filename, not visible in image)
-- Time Period: current, last5, last10, etc. (IMPORTANT: This comes from filename, not visible in image)
-- Team name (usually first text column)
-- Games played (GP, Games, Matches, etc.)
-- Goal Difference (GD, +/-, Goal Diff, etc.)
-- xG (Expected Goals) 
-- xGA (Expected Goals Against)
-- Net xG (xG difference, may be calculated as xG - xGA)
-- xG Pts (Expected Goal Points, xG Points, etc.)
-</data_fields>
-
 <requirements>
-- Show your thinking process clearly
-- IMPORTANT: country, match_type, and time_period fields are derived from filename metadata, NOT from image content
-- These filename-derived fields are non-verifiable from the image alone - this is expected and correct
-- Maintain exact team order from image (top to bottom)
-- Use exact team names as they appear
-- Handle positive/negative numbers correctly
-- Use null for missing data fields
-- Ensure correct data types (integers vs decimals)
+- country/match_type/time_period from filename, NOT image
+- Exact team order and names
+- Correct data types
+- Use null for missing fields
 </requirements>"""
 
-    def _analyze_image(self, image_path: str, prompt: str, step_name: str) -> str:
+    def _analyze_image(self, image_path: str, prompt: str) -> str:
         """Send image and prompt to Gemini API."""
-        with open(image_path, "rb") as image_file:
-            image_data = base64.b64encode(image_file.read()).decode()
-
-        mime_type = self._detect_mime_type(image_path)
+        with open(image_path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode()
 
         contents = [
             types.Content(
@@ -187,153 +141,120 @@ Extract these key columns (may have different labels):
                 parts=[
                     types.Part.from_text(text=prompt),
                     types.Part.from_bytes(
-                        data=base64.b64decode(image_data), mime_type=mime_type
+                        data=base64.b64decode(image_data),
+                        mime_type=self._detect_mime_type(image_path),
                     ),
                 ],
-            ),
+            )
         ]
 
-        config = types.GenerateContentConfig(
-            temperature=TEMPERATURE,
+        response = "".join(
+            chunk.text
+            for chunk in self.client.models.generate_content_stream(
+                model=MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(temperature=TEMPERATURE),
+            )
+            if chunk.text
         )
-
-        response = ""
-        for chunk in self.client.models.generate_content_stream(
-            model=MODEL,
-            contents=contents,
-            config=config,
-        ):
-            if chunk.text:
-                response += chunk.text
-
         return response.strip()
 
     def _create_reflection_prompt(self, extracted_data: dict) -> str:
-        """Create reflection prompt to validate extraction quality."""
-        return f"""<purpose>
-You are a data validation specialist. Review the original image and the extracted JSON data to assess accuracy and identify any issues.
-</purpose>
+        """Create reflection prompt for validation."""
+        return f"""<purpose>Validate extracted data against image.</purpose>
 
-<extracted_data>
-{json.dumps(extracted_data, indent=2)}
-</extracted_data>
+<extracted_data>{json.dumps(extracted_data, indent=2)}</extracted_data>
 
 <instructions>
-Think through your validation step by step, showing your reasoning process. Then provide the final assessment JSON.
+Validate step-by-step:
+1. Compare image vs extracted data
+2. Check team names, numbers, order
+3. Verify completeness
 
-Step-by-step validation:
-1. **Visual Comparison** - Compare image with extracted data
-2. **Team Names Check** - Verify spelling and completeness
-3. **Numerical Validation** - Check if numbers match and make sense
-4. **Order Verification** - Confirm team order matches image
-5. **Completeness Review** - Ensure no teams missed or duplicated
-6. **Filename Metadata Note** - country, match_type, and time_period are derived from filename, NOT image content (this is expected)
-7. **Final Assessment** - Overall quality evaluation
+Note: country/match_type/time_period from filename (not image) - don't flag as issues.
 
-After your analysis, provide the assessment in this format:
+Provide assessment:
 ```json
-{{
-  "is_accurate": true/false,
-  "confidence_score": 0.0,
-  "issues_found": ["list of specific issues"],
-  "suggested_corrections": ["list of suggested fixes"],
-  "final_assessment": "overall assessment"
-}}
+{{"is_accurate": bool, "confidence_score": float, "issues_found": ["issues"], "suggested_corrections": ["fixes"], "final_assessment": "summary"}}
 ```
-</instructions>
-
-<important_note>
-The fields 'country', 'match_type', and 'time_period' are derived from filename metadata and are NOT visible in the image. 
-Do NOT flag these as issues - they are intentionally non-verifiable from image content alone.
-</important_note>
-
-<validation_points>
-- Team names: exact spelling and completeness
-- Numerical accuracy: values match image
-- Data consistency: reasonable and logical values
-- Structural integrity: all fields present, correct types
-- Completeness: no missing or extra teams
-</validation_points>"""
+</instructions>"""
 
     def _parse_filename(self, image_path: str) -> dict:
-        """Parse filename to extract country, match_type, and time_period."""
-        filename = Path(image_path).stem  # Remove extension
-        parts = filename.split("_")
-
-        info = {}
-        if len(parts) >= 3:
-            info["country"] = parts[0].lower()
-            info["match_type"] = parts[1].lower()
-            info["time_period"] = parts[2].lower()
-
-        return info
+        """Parse filename to extract metadata."""
+        parts = Path(image_path).stem.split("_")
+        return (
+            {
+                "country": parts[0].lower(),
+                "match_type": parts[1].lower(),
+                "time_period": parts[2].lower(),
+            }
+            if len(parts) >= 3
+            else {}
+        )
 
     def extract_data(self, image_path: str) -> tuple[SportsTableData, ReflectionResult]:
         """Extract data from image with reflection validation."""
         filename_info = self._parse_filename(image_path)
 
-        prompt = self._create_extraction_prompt(filename_info)
-        response = self._analyze_image(image_path, prompt, "🔍 Step 1: Extracting Data")
+        # Extract data
+        extraction_response = self._analyze_image(
+            image_path, self._create_extraction_prompt(filename_info)
+        )
+        if not extraction_response:
+            raise ValueError("Empty extraction response")
 
-        if not response:
-            raise ValueError("Empty response from model")
-
-        parsed_data = self._extract_json(response)
+        parsed_data = self._extract_json(extraction_response)
         table_data = SportsTableData(**parsed_data)
 
-        reflection_prompt = self._create_reflection_prompt(parsed_data)
+        # Reflect on extraction
         reflection_response = self._analyze_image(
-            image_path,
-            reflection_prompt,
-            "🤔 Step 2: Reflecting on Extraction",
+            image_path, self._create_reflection_prompt(parsed_data)
         )
-
         if not reflection_response:
-            raise ValueError("Empty reflection response from model")
+            raise ValueError("Empty reflection response")
 
-        reflection_data = self._extract_json(reflection_response)
-        reflection_result = ReflectionResult(**reflection_data)
-
-        console.print("[green]✅ Extraction and reflection complete![/green]\n")
+        reflection_result = ReflectionResult(**self._extract_json(reflection_response))
+        console.print("[green]✅ Complete![/green]\n")
 
         return table_data, reflection_result
 
     def _extract_json(self, text: str) -> dict:
-        """Extract JSON from model response with robust error handling."""
-        if not text or not text.strip():
-            raise json.JSONDecodeError("Empty response text", text or "", 0)
+        """Extract JSON from model response."""
+        if not text.strip():
+            raise json.JSONDecodeError("Empty response", text, 0)
 
         text = text.strip()
 
+        # Try direct parse
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
+        # Try extracting from code blocks
         for delimiter in ["```json", "```"]:
             if delimiter in text:
                 try:
-                    parts = text.split(delimiter)
-                    if len(parts) >= 2 and (
-                        json_str := parts[1].split("```")[0].strip()
-                    ):
+                    json_str = text.split(delimiter)[1].split("```")[0].strip()
+                    if json_str:
                         return json.loads(json_str)
                 except (IndexError, json.JSONDecodeError):
                     continue
 
-        start_idx = text.find("{")
-        if start_idx == -1:
-            raise json.JSONDecodeError("No JSON object found", text, 0)
+        # Find JSON object by braces
+        start = text.find("{")
+        if start == -1:
+            raise json.JSONDecodeError("No JSON found", text, 0)
 
         brace_count = 0
-        for i, char in enumerate(text[start_idx:], start_idx):
+        for i, char in enumerate(text[start:], start):
             if char == "{":
                 brace_count += 1
             elif char == "}":
                 brace_count -= 1
                 if brace_count == 0:
                     try:
-                        return json.loads(text[start_idx : i + 1])
+                        return json.loads(text[start : i + 1])
                     except json.JSONDecodeError:
                         continue
 
@@ -341,24 +262,24 @@ Do NOT flag these as issues - they are intentionally non-verifiable from image c
 
     def save_to_file(self, data: SportsTableData, output_path: str) -> None:
         """Save extracted data to JSON file."""
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(data.model_dump(), f, indent=2, ensure_ascii=False)
-        console.print(f"[green]Data saved to: {output_path}[/green]")
+        Path(output_path).write_text(
+            json.dumps(data.model_dump(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        console.print(f"[green]Saved: {output_path}[/green]")
 
 
 def validate_environment() -> str:
-    """Validates environment and returns API key."""
+    """Validate environment and return API key."""
     if api_key := os.getenv("GEMINI_API_KEY"):
         return api_key
 
     console.print(
         Panel(
-            "[red]Error: GEMINI_API_KEY environment variable is not set[/red]\n\n"
-            "Please get your API key from Google AI Studio:\n"
-            "https://aistudio.google.com/apikey\n\n"
-            "Then set it with:\n"
-            "[yellow]export GEMINI_API_KEY='your-api-key-here'[/yellow]",
-            title="Configuration Error",
+            "[red]GEMINI_API_KEY not set[/red]\n\n"
+            "Get key: https://aistudio.google.com/apikey\n"
+            "Set: [yellow]export GEMINI_API_KEY='key'[/yellow]",
+            title="Config Error",
             border_style="red",
         )
     )
@@ -366,16 +287,10 @@ def validate_environment() -> str:
 
 
 def display_results(data: SportsTableData, reflection: ReflectionResult) -> None:
-    """Display extraction results with reflection analysis."""
-    # Extraction summary
-    summary = f"""[bold]Country:[/bold] {data.country}
-[bold]Match Type:[/bold] {data.match_type}
-[bold]Time Period:[/bold] {data.time_period}
-[bold]Teams Extracted:[/bold] {len(data.teams)}"""
+    """Display extraction results."""
+    summary = f"""Country: {data.country} | Type: {data.match_type} | Period: {data.time_period} | Teams: {len(data.teams)}"""
+    console.print(Panel(summary, title="📊 Summary", border_style="blue"))
 
-    console.print(Panel(summary, title="📊 Extraction Summary", border_style="blue"))
-
-    # Reflection results
     accuracy_color = "green" if reflection.is_accurate else "red"
     confidence_color = (
         "green"
@@ -385,27 +300,23 @@ def display_results(data: SportsTableData, reflection: ReflectionResult) -> None
         else "red"
     )
 
-    reflection_summary = f"""[bold]Accuracy:[/bold] [{accuracy_color}]{"✓ Accurate" if reflection.is_accurate else "✗ Issues Found"}[/{accuracy_color}]
-[bold]Confidence:[/bold] [{confidence_color}]{reflection.confidence_score:.1%}[/{confidence_color}]
-[bold]Assessment:[/bold] {reflection.final_assessment}"""
+    reflection_summary = f"""Accuracy: [{accuracy_color}]{"✓" if reflection.is_accurate else "✗"}[/{accuracy_color}] | Confidence: [{confidence_color}]{reflection.confidence_score:.1%}[/{confidence_color}]\n{reflection.final_assessment}"""
+    console.print(Panel(reflection_summary, title="🔍 Analysis", border_style="cyan"))
 
-    console.print(
-        Panel(reflection_summary, title="🔍 Reflection Analysis", border_style="cyan")
-    )
-
-    # Issues and suggestions if any
     if reflection.issues_found:
-        issues_text = "\n".join(f"• {issue}" for issue in reflection.issues_found)
-        console.print(Panel(issues_text, title="⚠️ Issues Found", border_style="yellow"))
-
-    if reflection.suggested_corrections:
-        suggestions_text = "\n".join(
-            f"• {suggestion}" for suggestion in reflection.suggested_corrections
-        )
         console.print(
             Panel(
-                suggestions_text,
-                title="💡 Suggested Corrections",
+                "\n".join(f"• {i}" for i in reflection.issues_found),
+                title="⚠️ Issues",
+                border_style="yellow",
+            )
+        )
+
+    if reflection.suggested_corrections:
+        console.print(
+            Panel(
+                "\n".join(f"• {s}" for s in reflection.suggested_corrections),
+                title="💡 Fixes",
                 border_style="magenta",
             )
         )
@@ -422,102 +333,69 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate all image paths first
+    # Validate image paths
     image_paths = []
     for path_str in args.image_paths:
-        image_path = Path(path_str)
-        if not image_path.exists():
-            console.print(f"[red]Error: Image file '{path_str}' not found[/red]")
+        path = Path(path_str)
+        if not path.exists():
+            console.print(f"[red]File not found: {path_str}[/red]")
             sys.exit(1)
-        if image_path.suffix.lower() != ".png":
-            console.print(
-                f"[red]Error: Only PNG files are supported. Got '{image_path.suffix}' for '{path_str}'[/red]"
-            )
+        if path.suffix.lower() != ".png":
+            console.print(f"[red]Only PNG supported: {path.suffix}[/red]")
             sys.exit(1)
-        image_paths.append(image_path)
+        image_paths.append(path)
 
     api_key = validate_environment()
 
     try:
         extractor = SportsTableExtractor(api_key=api_key)
 
-        if len(image_paths) == 1:
-            console.print(f"[cyan]Processing: {image_paths[0].name}[/cyan]\n")
-        else:
-            console.print(
-                f"[cyan]Processing {len(image_paths)} images in parallel...[/cyan]"
-            )
+        console.print(
+            f"[cyan]Processing {len(image_paths)} image{'s' if len(image_paths) > 1 else ''}...[/cyan]"
+        )
+        if len(image_paths) > 1:
             for i, path in enumerate(image_paths, 1):
                 console.print(f"  {i}. {path.name}")
-            console.print()
 
-        if len(image_paths) == 1:
-            image_path = image_paths[0]
-            console.print(
-                f"[bold blue]--- Processing: {image_path.name} ---[/bold blue]"
-            )
-            data, reflection = extractor.extract_data(str(image_path))
-            output_path = f"{image_path.stem}_extracted.json"
+        def process_image(path: Path) -> Tuple[Path, SportsTableData, ReflectionResult]:
+            console.print(f"[blue]Processing: {path.name}[/blue]")
+            data, reflection = extractor.extract_data(str(path))
+            output_path = f"{path.stem}_extracted.json"
             extractor.save_to_file(data, output_path)
-            results = [(image_path, data, reflection)]
+            console.print(f"[green]✅ {path.name} ({len(data.teams)} teams)[/green]")
+            return path, data, reflection
+
+        results = []
+        if len(image_paths) == 1:
+            results = [process_image(image_paths[0])]
         else:
-
-            def process_single_image(
-                image_path: Path,
-            ) -> Tuple[Path, SportsTableData, str]:
-                console.print(
-                    f"\n[bold blue]--- Processing: {image_path.name} ---[/bold blue]"
-                )
-                data, reflection = extractor.extract_data(str(image_path))
-                output_path = f"{image_path.stem}_extracted.json"
-                extractor.save_to_file(data, output_path)
-                console.print(
-                    f"[green]✅ {image_path.name} ({len(data.teams)} teams)[/green]"
-                )
-                return image_path, data, reflection
-
-            results = []
             with ThreadPoolExecutor(max_workers=min(len(image_paths), 4)) as executor:
                 future_to_path = {
-                    executor.submit(process_single_image, path): path
-                    for path in image_paths
+                    executor.submit(process_image, path): path for path in image_paths
                 }
 
                 for future in as_completed(future_to_path):
                     try:
-                        image_path, data, reflection = future.result()
-                        results.append((image_path, data, reflection))
+                        results.append(future.result())
                     except Exception as e:
                         failed_path = future_to_path[future]
-                        console.print(
-                            f"[red]❌ Failed to process {failed_path.name}: {e}[/red]"
-                        )
+                        console.print(f"[red]❌ {failed_path.name}: {e}[/red]")
+
+        total_teams = sum(len(data.teams) for _, data, _ in results)
 
         if len(results) == 1:
-            image_path, data, reflection = results[0]
-            if len(image_paths) > 1:
-                display_results(data, reflection)
-            console.print(
-                f"[bold green]🎉 Successfully extracted {len(data.teams)} teams![/bold green]"
-            )
+            console.print(f"[green]🎉 Extracted {total_teams} teams![/green]")
         else:
-            console.print("\n[bold cyan]📊 Results Summary:[/bold cyan]\n")
-
-            total_teams = 0
-            for image_path, data, reflection in results:
-                total_teams += len(data.teams)
-                console.print(
-                    f"[bold blue]• {image_path.name}[/bold blue]: {len(data.teams)} teams extracted"
-                )
-
+            console.print("\n[cyan]📊 Summary:[/cyan]")
+            for path, data, _ in results:
+                console.print(f"• {path.name}: {len(data.teams)} teams")
             console.print(
-                f"\n[bold green]🎉 Successfully processed {len(results)} images with {total_teams} total teams![/bold green]"
+                f"\n[green]🎉 Processed {len(results)} images, {total_teams} total teams![/green]"
             )
 
-            # Show detailed results for all images
-            console.print("\n[dim]--- Detailed Results ---[/dim]")
-            for image_path, data, reflection in results:
-                console.print(f"\n[bold blue]{image_path.name}:[/bold blue]")
+            console.print("\n[dim]--- Details ---[/dim]")
+            for path, data, reflection in results:
+                console.print(f"\n[blue]{path.name}:[/blue]")
                 display_results(data, reflection)
         return 0
 
@@ -531,23 +409,17 @@ def main():
 
 
 if __name__ == "__main__":
-    # Display usage if no arguments
     if len(sys.argv) == 1:
         console.print(
             Panel(
                 "[bold]Sports Table Extractor[/bold]\n\n"
-                "Extract football league table data from images to structured JSON\n\n"
-                "[yellow]Usage:[/yellow]\n"
-                "  uv run futuro.py image1.png\n"
-                "  uv run futuro.py image1.png image2.png\n"
-                "  uv run futuro.py *.png\n\n"
-                "[yellow]Setup:[/yellow]\n"
-                "  export GEMINI_API_KEY='your-api-key-here'\n"
-                "  Get key from: https://aistudio.google.com/apikey",
-                title="🏆 Sports Table Extractor",
+                "Extract league table data from images\n\n"
+                "[yellow]Usage:[/yellow] uv run futuro.py image.png\n"
+                "[yellow]Setup:[/yellow] export GEMINI_API_KEY='key'\n"
+                "Get key: https://aistudio.google.com/apikey",
+                title="🏆 Futuro",
                 border_style="cyan",
             )
         )
         sys.exit(0)
-    else:
-        sys.exit(main())
+    sys.exit(main())
