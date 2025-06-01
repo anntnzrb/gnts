@@ -19,13 +19,6 @@ from typing import Optional, Tuple
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import (
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    BarColumn,
-    TaskProgressColumn,
-)
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field, field_validator
@@ -181,10 +174,8 @@ Extract these key columns (may have different labels):
 - Ensure correct data types (integers vs decimals)
 </requirements>"""
 
-    def _analyze_image(
-        self, image_path: str, prompt: str, step_name: str, quiet: bool = False
-    ) -> str:
-        """Send image and prompt to Gemini API with optional streaming display."""
+    def _analyze_image(self, image_path: str, prompt: str, step_name: str) -> str:
+        """Send image and prompt to Gemini API."""
         with open(image_path, "rb") as image_file:
             image_data = base64.b64encode(image_file.read()).decode()
 
@@ -206,10 +197,6 @@ Extract these key columns (may have different labels):
             temperature=TEMPERATURE,
         )
 
-        if not quiet:
-            console.print(f"\n[bold cyan]{step_name}[/bold cyan]")
-            console.print("[dim]--- LLM Thinking Process ---[/dim]")
-
         response = ""
         for chunk in self.client.models.generate_content_stream(
             model=MODEL,
@@ -217,12 +204,8 @@ Extract these key columns (may have different labels):
             config=config,
         ):
             if chunk.text:
-                if not quiet:
-                    console.print(chunk.text, end="")
                 response += chunk.text
 
-        if not quiet:
-            console.print("\n[dim]--- End of LLM Response ---[/dim]\n")
         return response.strip()
 
     def _create_reflection_prompt(self, extracted_data: dict) -> str:
@@ -285,16 +268,12 @@ Do NOT flag these as issues - they are intentionally non-verifiable from image c
 
         return info
 
-    def extract_data(
-        self, image_path: str, quiet: bool = False
-    ) -> tuple[SportsTableData, ReflectionResult]:
+    def extract_data(self, image_path: str) -> tuple[SportsTableData, ReflectionResult]:
         """Extract data from image with reflection validation."""
         filename_info = self._parse_filename(image_path)
 
         prompt = self._create_extraction_prompt(filename_info)
-        response = self._analyze_image(
-            image_path, prompt, "🔍 Step 1: Extracting Data", quiet
-        )
+        response = self._analyze_image(image_path, prompt, "🔍 Step 1: Extracting Data")
 
         if not response:
             raise ValueError("Empty response from model")
@@ -307,7 +286,6 @@ Do NOT flag these as issues - they are intentionally non-verifiable from image c
             image_path,
             reflection_prompt,
             "🤔 Step 2: Reflecting on Extraction",
-            quiet,
         )
 
         if not reflection_response:
@@ -316,8 +294,7 @@ Do NOT flag these as issues - they are intentionally non-verifiable from image c
         reflection_data = self._extract_json(reflection_response)
         reflection_result = ReflectionResult(**reflection_data)
 
-        if not quiet:
-            console.print("[green]✅ Extraction and reflection complete![/green]\n")
+        console.print("[green]✅ Extraction and reflection complete![/green]\n")
 
         return table_data, reflection_result
 
@@ -362,14 +339,11 @@ Do NOT flag these as issues - they are intentionally non-verifiable from image c
 
         raise json.JSONDecodeError("No valid JSON found", text, 0)
 
-    def save_to_file(
-        self, data: SportsTableData, output_path: str, quiet: bool = False
-    ) -> None:
+    def save_to_file(self, data: SportsTableData, output_path: str) -> None:
         """Save extracted data to JSON file."""
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data.model_dump(), f, indent=2, ensure_ascii=False)
-        if not quiet:
-            console.print(f"[green]Data saved to: {output_path}[/green]")
+        console.print(f"[green]Data saved to: {output_path}[/green]")
 
 
 def validate_environment() -> str:
@@ -445,18 +419,6 @@ def main():
     parser.add_argument(
         "image_paths", nargs="+", help="Path(s) to the sports table image file(s)"
     )
-    parser.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        help="Suppress AI thinking process (auto-enabled for multiple files)",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Show AI thinking process even for multiple files",
-    )
 
     args = parser.parse_args()
 
@@ -489,137 +451,47 @@ def main():
                 console.print(f"  {i}. {path.name}")
             console.print()
 
-        # Determine if we should use quiet mode
-        use_quiet = args.quiet or (len(image_paths) > 1 and not args.verbose)
-
         if len(image_paths) == 1:
             image_path = image_paths[0]
-            if use_quiet:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn(f"[cyan]Analyzing {image_path.name}...[/cyan]"),
-                    console=console,
-                ) as progress:
-                    progress.add_task("processing", total=None)
-                    data, reflection = extractor.extract_data(
-                        str(image_path), quiet=True
-                    )
-            else:
-                console.print(
-                    f"[bold blue]--- Processing: {image_path.name} ---[/bold blue]"
-                )
-                data, reflection = extractor.extract_data(str(image_path), quiet=False)
-
+            console.print(
+                f"[bold blue]--- Processing: {image_path.name} ---[/bold blue]"
+            )
+            data, reflection = extractor.extract_data(str(image_path))
             output_path = f"{image_path.stem}_extracted.json"
-            extractor.save_to_file(data, output_path, quiet=use_quiet)
+            extractor.save_to_file(data, output_path)
             results = [(image_path, data, reflection)]
         else:
 
             def process_single_image(
                 image_path: Path,
             ) -> Tuple[Path, SportsTableData, str]:
-                if not use_quiet:
-                    console.print(
-                        f"\n[bold blue]--- Processing: {image_path.name} ---[/bold blue]"
-                    )
-
-                data, reflection = extractor.extract_data(
-                    str(image_path), quiet=use_quiet
+                console.print(
+                    f"\n[bold blue]--- Processing: {image_path.name} ---[/bold blue]"
                 )
+                data, reflection = extractor.extract_data(str(image_path))
                 output_path = f"{image_path.stem}_extracted.json"
-                extractor.save_to_file(data, output_path, quiet=use_quiet)
-
-                if not use_quiet:
-                    console.print(
-                        f"[green]✅ {image_path.name} ({len(data.teams)} teams)[/green]"
-                    )
-
+                extractor.save_to_file(data, output_path)
+                console.print(
+                    f"[green]✅ {image_path.name} ({len(data.teams)} teams)[/green]"
+                )
                 return image_path, data, reflection
 
-            if use_quiet:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[bold blue]Image"),
-                    BarColumn(),
-                    TaskProgressColumn(),
-                    console=console,
-                ) as progress:
-                    tasks = {}
-                    for image_path in image_paths:
-                        task_id = progress.add_task(
-                            f"[cyan]{image_path.name}[/cyan]", total=2
+            results = []
+            with ThreadPoolExecutor(max_workers=min(len(image_paths), 4)) as executor:
+                future_to_path = {
+                    executor.submit(process_single_image, path): path
+                    for path in image_paths
+                }
+
+                for future in as_completed(future_to_path):
+                    try:
+                        image_path, data, reflection = future.result()
+                        results.append((image_path, data, reflection))
+                    except Exception as e:
+                        failed_path = future_to_path[future]
+                        console.print(
+                            f"[red]❌ Failed to process {failed_path.name}: {e}[/red]"
                         )
-                        tasks[image_path] = task_id
-
-                    def quiet_process_image(
-                        image_path: Path,
-                    ) -> Tuple[Path, SportsTableData, str]:
-                        task_id = tasks[image_path]
-                        progress.update(
-                            task_id,
-                            description=f"[cyan]{image_path.name} - Extracting...[/cyan]",
-                        )
-                        data, reflection = extractor.extract_data(
-                            str(image_path), quiet=True
-                        )
-                        progress.advance(task_id, 1)
-
-                        progress.update(
-                            task_id,
-                            description=f"[cyan]{image_path.name} - Saving...[/cyan]",
-                        )
-                        output_path = f"{image_path.stem}_extracted.json"
-                        extractor.save_to_file(data, output_path, quiet=True)
-                        progress.advance(task_id, 1)
-
-                        progress.update(
-                            task_id,
-                            description=f"[green]{image_path.name} - Complete ({len(data.teams)} teams)[/green]",
-                        )
-                        return image_path, data, reflection
-
-                    results = []
-                    with ThreadPoolExecutor(
-                        max_workers=min(len(image_paths), 4)
-                    ) as executor:
-                        future_to_path = {
-                            executor.submit(quiet_process_image, path): path
-                            for path in image_paths
-                        }
-
-                        for future in as_completed(future_to_path):
-                            try:
-                                image_path, data, reflection = future.result()
-                                results.append((image_path, data, reflection))
-                            except Exception as e:
-                                failed_path = future_to_path[future]
-                                task_id = tasks[failed_path]
-                                progress.update(
-                                    task_id,
-                                    description=f"[red]{failed_path.name} - Failed[/red]",
-                                )
-                                console.print(
-                                    f"[red]❌ Failed to process {failed_path.name}: {e}[/red]"
-                                )
-            else:
-                results = []
-                with ThreadPoolExecutor(
-                    max_workers=min(len(image_paths), 4)
-                ) as executor:
-                    future_to_path = {
-                        executor.submit(process_single_image, path): path
-                        for path in image_paths
-                    }
-
-                    for future in as_completed(future_to_path):
-                        try:
-                            image_path, data, reflection = future.result()
-                            results.append((image_path, data, reflection))
-                        except Exception as e:
-                            failed_path = future_to_path[future]
-                            console.print(
-                                f"[red]❌ Failed to process {failed_path.name}: {e}[/red]"
-                            )
 
         if len(results) == 1:
             image_path, data, reflection = results[0]
@@ -666,10 +538,9 @@ if __name__ == "__main__":
                 "[bold]Sports Table Extractor[/bold]\n\n"
                 "Extract football league table data from images to structured JSON\n\n"
                 "[yellow]Usage:[/yellow]\n"
-                "  uv run futuro.py image1.png  # Shows AI thinking\n"
-                "  uv run futuro.py image1.png image2.png  # Auto quiet mode\n"
-                "  uv run futuro.py *.png --verbose  # Force AI thinking\n"
-                "  uv run futuro.py image.png --quiet  # Force quiet mode\n\n"
+                "  uv run futuro.py image1.png\n"
+                "  uv run futuro.py image1.png image2.png\n"
+                "  uv run futuro.py *.png\n\n"
                 "[yellow]Setup:[/yellow]\n"
                 "  export GEMINI_API_KEY='your-api-key-here'\n"
                 "  Get key from: https://aistudio.google.com/apikey",
