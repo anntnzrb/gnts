@@ -10,7 +10,7 @@
 Sports Table Extractor - Advanced image analysis agent for extracting football league table data.
 
 This single-file agent uses Google's Gemini AI model to extract structured data from images of
-football league tables, focusing specifically on the last 10 games performance statistics.
+football league tables, focusing on performance statistics from the displayed period.
 The tool processes images with the naming format '{country}-{match_type}.png' and extracts
 performance metrics like expected goals (xG) and other advanced statistics.
 
@@ -47,9 +47,9 @@ TEMPERATURE = 0.1
 
 
 class TeamData(BaseModel):
-    """Team performance data for the last 10 matches."""
+    """Team performance data for the analyzed period."""
     team: str = Field(description="Team name")
-    games: int = Field(description="Games played")
+    games: int = Field(description="Games played in the analyzed period")
     goal_diff: int = Field(description="Goal difference")
     xG: float = Field(description="Expected Goals")
     xGA: float = Field(description="Expected Goals Against")
@@ -58,7 +58,7 @@ class TeamData(BaseModel):
 
 
 class SportsTableData(BaseModel):
-    """Sports table data extracted from an image, containing team performance data for the last 10 matches."""
+    """Sports table data extracted from an image, containing team performance data for the analyzed period."""
     country: str = Field(description="Country/league (e.g., italy, spain, england)")
     match_type: str = Field(default="all", description="Match type: all, home, or away")
     teams: list[TeamData] = Field(description="List of team data")
@@ -87,7 +87,7 @@ class ReflectionResult(BaseModel):
 
 class TeamStats(BaseModel):
     """Team performance statistics for a specific match type."""
-    games: int = Field(description="Games played")
+    games: int = Field(description="Games played in the analyzed period")
     goal_diff: int = Field(description="Goal difference")
     xG: float = Field(description="Expected Goals")
     xGA: float = Field(description="Expected Goals Against")
@@ -154,7 +154,7 @@ Filename suggests: Country={filename_info.get("country", "unknown")}, Type={file
 </filename_context>
 """
 
-        return f"""<purpose>Extract sports table data (last 10 games) to JSON.</purpose>
+        return f"""<purpose>Extract sports table data from the image to JSON.</purpose>
 {context}
 <instructions>
 Analyze step-by-step, then provide JSON:
@@ -170,7 +170,7 @@ JSON format:
 
 <requirements>
 - country/match_type from filename, NOT image
-- Data should represent LAST 10 GAMES only
+- Extract all performance data shown in the table for the time period displayed
 - Exact team order and names
 - Correct data types
 - Use null for missing fields
@@ -215,7 +215,7 @@ Validate step-by-step:
 2. Check team names, numbers, order
 3. Verify completeness
 
-Note: country/match_type from filename (not image) - don't flag as issues. All data should be for last 10 games only.
+Note: country/match_type from filename (not image) - don't flag as issues. Validate that extracted data accurately represents the time period shown in the table.
 
 Provide assessment:
 ```json
@@ -314,12 +314,12 @@ Provide assessment:
                 "away": "Away matches only",
             },
             "statistics": {
-                "games": "Number of games played in last 10 matches",
-                "goal_diff": "Goal difference in last 10 matches (goals scored minus goals conceded)",
-                "xG": "Expected Goals in last 10 matches - likelihood of scoring based on shot quality",
-                "xGA": "Expected Goals Against in last 10 matches - likelihood of conceding based on shots faced",
-                "net_xG": "Net Expected Goals in last 10 matches (xG minus xGA)",
-                "xG_pts": "Expected Goal Points in last 10 matches - points a team would have based on xG performance",
+                "games": "Number of games played in the analyzed period",
+                "goal_diff": "Goal difference in the analyzed period (goals scored minus goals conceded)",
+                "xG": "Expected Goals in the analyzed period - likelihood of scoring based on shot quality",
+                "xGA": "Expected Goals Against in the analyzed period - likelihood of conceding based on shots faced",
+                "net_xG": "Net Expected Goals in the analyzed period (xG minus xGA)",
+                "xG_pts": "Expected Goal Points in the analyzed period - points a team would have based on xG performance",
             },
         }
 
