@@ -13,6 +13,7 @@ Interactive team selection with mathematical probability calculations
 import json
 import math
 from dataclasses import dataclass
+from itertools import chain
 from typing import List, Tuple
 
 import typer
@@ -33,20 +34,22 @@ class DataValidationError(BettingAgentError):
 
 
 class BettingConfig:
+    """Configuration constants for betting thresholds and parameters."""
+
     STRONG_CONFIDENCE_THRESHOLD = 0.75
     MEDIUM_CONFIDENCE_THRESHOLD = 0.60
     WEAK_CONFIDENCE_THRESHOLD = 0.52
-
     BTTS_SCORING_THRESHOLD = 0.7
     CLEAN_SHEET_THRESHOLD = 0.8
     WIN_TO_NIL_THRESHOLD = 0.65
-
     TOTAL_GOALS_LINES = [1.5, 2.5, 3.5]
     HANDICAP_EDGE_THRESHOLD = 0.3
 
 
 @dataclass
 class TeamStats:
+    """Statistical data for a team across multiple games."""
+
     games: int
     goal_diff: int
     xG: float
@@ -69,6 +72,8 @@ class TeamStats:
 
 @dataclass
 class TeamData:
+    """Complete team data including overall, home, and away statistics."""
+
     name: str
     all_stats: TeamStats
     home_stats: TeamStats
@@ -77,6 +82,8 @@ class TeamData:
 
 @dataclass
 class MarketRecommendation:
+    """Betting recommendation for a specific market with confidence metrics."""
+
     market: str
     recommendation: str
     confidence: float
@@ -96,7 +103,10 @@ class MarketRecommendation:
 
 
 class DataProcessor:
+    """Handles loading and processing of team data from JSON files."""
+
     def load_json(self, file_path: str) -> dict:
+        """Load and validate JSON data file."""
         try:
             with open(file_path, "r") as f:
                 data = json.load(f)
@@ -110,6 +120,7 @@ class DataProcessor:
             raise DataValidationError(f"Invalid JSON format: {e}")
 
     def extract_team_data(self, team_name: str, data: dict) -> TeamData:
+        """Extract and structure team data from raw JSON."""
         team_raw = data["data"][team_name]
         return TeamData(
             name=team_name,
@@ -119,6 +130,7 @@ class DataProcessor:
         )
 
     def calculate_per_game_rates(self, stats: TeamStats) -> dict:
+        """Calculate per-game statistical rates for a team."""
         if stats.games == 0:
             return {
                 "xG_per_game": 0.0,
@@ -136,27 +148,31 @@ class DataProcessor:
 
 
 class MatchAnalyzer:
+    """Analyzes match data to calculate expected goals and team strengths."""
+
     def __init__(self, home_team_data: TeamData, away_team_data: TeamData):
         self.home_team = home_team_data
         self.away_team = away_team_data
 
     def get_contextual_stats(self, team_data: TeamData, is_home: bool) -> TeamStats:
+        """Get team statistics based on home/away context."""
         return team_data.home_stats if is_home else team_data.away_stats
 
     def calculate_expected_goals(self) -> Tuple[float, float]:
+        """Calculate expected goals for both teams in their respective contexts."""
         return (
             self.home_team.home_stats.xG_per_game,
             self.away_team.away_stats.xG_per_game,
         )
 
     def calculate_total_expected_goals(self) -> float:
-        home_xG, away_xG = self.calculate_expected_goals()
-        return home_xG + away_xG
+        """Calculate total expected goals for the match."""
+        return sum(self.calculate_expected_goals())
 
     def calculate_team_strengths(self) -> dict:
+        """Calculate relative team strengths based on net xG."""
         home_net_xG = self.home_team.home_stats.net_xG_per_game
         away_net_xG = self.away_team.away_stats.net_xG_per_game
-
         return {
             "home_strength": home_net_xG,
             "away_strength": away_net_xG,
@@ -165,32 +181,28 @@ class MatchAnalyzer:
 
 
 def xG_to_scoring_probability(xG_rate: float) -> float:
+    """Convert expected goals rate to scoring probability using Poisson distribution."""
     return 1 - math.exp(-xG_rate)
 
 
 def calculate_win_probabilities(home_xG: float, away_xG: float) -> dict:
+    """Calculate match outcome probabilities based on expected goals."""
     if home_xG + away_xG == 0:
         return {"home": 0.33, "draw": 0.33, "away": 0.33}
-    
-    xG_diff = home_xG - away_xG
-    total_xG = home_xG + away_xG
-    
-    if abs(xG_diff) > 1.5:
-        multiplier = 0.27
-    elif abs(xG_diff) > 0.8:
-        multiplier = 0.24
-    else:
-        multiplier = 0.20
+
+    xG_diff, total_xG = home_xG - away_xG, home_xG + away_xG
+    multiplier = 0.27 if abs(xG_diff) > 1.5 else 0.24 if abs(xG_diff) > 0.8 else 0.20
+
     home_prob = max(0.15, min(0.8, 0.5 + xG_diff * multiplier))
     away_prob = max(0.15, min(0.8, 0.5 - xG_diff * multiplier))
-    
     base_draw_prob = max(0.12, min(0.25, 0.30 - total_xG * 0.06))
+
     total = home_prob + away_prob + base_draw_prob
-    home_prob /= total
-    away_prob /= total
-    draw_prob = base_draw_prob / total
-    
-    return {"home": home_prob, "draw": draw_prob, "away": away_prob}
+    return {
+        "home": home_prob / total,
+        "draw": base_draw_prob / total,
+        "away": away_prob / total,
+    }
 
 
 class MatchWinnerCalculator:
@@ -275,51 +287,29 @@ class OverUnderGoalsCalculator:
         return over_rec, under_rec
 
     def generate_goals_analysis(self, expected_total: float) -> list:
-        """Generate comprehensive over/under analysis for multiple goal lines"""
-        lines = [0.5, 1.5, 3.5]
-        analysis = []
+        """Generate comprehensive over/under analysis for multiple goal lines using functional patterns."""
 
-        for line in lines:
-            probabilities = self._calculate_probabilities(expected_total, line)
+        def analyze_line(line: float) -> dict:
+            probs = self._calculate_probabilities(expected_total, line)
 
-            over_confidence = (
-                "Strong"
-                if probabilities["over"] > 0.65
-                else "Medium"
-                if probabilities["over"] > 0.55
-                else "Weak"
-            )
-            under_confidence = (
-                "Strong"
-                if probabilities["under"] > 0.65
-                else "Medium"
-                if probabilities["under"] > 0.55
-                else "Weak"
-            )
+            def confidence_level(p: float) -> str:
+                return "Strong" if p > 0.65 else "Medium" if p > 0.55 else "Weak"
 
-            best_bet = (
-                "Over" if probabilities["over"] > probabilities["under"] else "Under"
-            )
-            best_prob = max(probabilities["over"], probabilities["under"])
-            best_confidence = (
-                over_confidence if best_bet == "Over" else under_confidence
-            )
+            best_bet, best_prob = max(probs.items(), key=lambda x: x[1])
 
-            analysis.append(
-                {
-                    "line": line,
-                    "over_prob": probabilities["over"],
-                    "under_prob": probabilities["under"],
-                    "over_confidence": over_confidence,
-                    "under_confidence": under_confidence,
-                    "best_bet": best_bet,
-                    "best_prob": best_prob,
-                    "best_confidence": best_confidence,
-                    "expected_total": expected_total,
-                }
-            )
+            return {
+                "line": line,
+                "over_prob": probs["over"],
+                "under_prob": probs["under"],
+                "over_confidence": confidence_level(probs["over"]),
+                "under_confidence": confidence_level(probs["under"]),
+                "best_bet": best_bet.title(),
+                "best_prob": best_prob,
+                "best_confidence": confidence_level(best_prob),
+                "expected_total": expected_total,
+            }
 
-        return analysis
+        return list(map(analyze_line, [0.5, 1.5, 3.5]))
 
 
 class BothTeamsScoreCalculator:
@@ -379,38 +369,28 @@ class AsianHandicapCalculator:
     def generate_handicap_analysis(
         self, net_xG_diff: float, home_team: str, away_team: str
     ) -> list:
-"""
-        Generate comprehensive handicap analysis from -2.0 to +2.0
-        """
-        handicaps = [-2.0, -1.5, -1.0, -0.5, 0.0, +0.5, +1.0, +1.5, +2.0]
-        analysis = []
+        """Generate comprehensive handicap analysis from -2.0 to +2.0 using functional patterns."""
 
-        for handicap in handicaps:
-            if handicap <= 0:
-                team = home_team
-                display_handicap = f"{handicap:+.1f}" if handicap != 0 else "0.0"
-                effective_advantage = net_xG_diff + handicap
-                prob = self.calculate_handicap_probability(effective_advantage)
-            else:
-                team = away_team
-                display_handicap = f"{handicap:+.1f}"
-                effective_advantage = -net_xG_diff + handicap
-                prob = self.calculate_handicap_probability(effective_advantage)
-
+        def analyze_handicap(handicap: float) -> dict:
+            team = home_team if handicap <= 0 else away_team
+            display_handicap = f"{handicap:+.1f}" if handicap != 0 else "0.0"
+            effective_advantage = (
+                net_xG_diff if handicap <= 0 else -net_xG_diff
+            ) + handicap
+            prob = self.calculate_handicap_probability(effective_advantage)
             confidence = (
                 "Strong" if prob > 0.65 else "Medium" if prob > 0.55 else "Weak"
             )
 
-            analysis.append(
-                {
-                    "handicap": display_handicap,
-                    "team": team,
-                    "probability": prob,
-                    "confidence": confidence,
-                }
-            )
+            return {
+                "handicap": display_handicap,
+                "team": team,
+                "probability": prob,
+                "confidence": confidence,
+            }
 
-        return analysis
+        handicaps = [-2.0, -1.5, -1.0, -0.5, 0.0, +0.5, +1.0, +1.5, +2.0]
+        return list(map(analyze_handicap, handicaps))
 
     def recommend_handicap_bet(
         self, net_xG_diff: float, home_team: str, away_team: str
@@ -540,7 +520,7 @@ class DoubleChanceCalculator:
         recommendations = {
             "home_or_draw": f"{home_team} or Draw",
             "away_or_draw": f"{away_team} or Draw",
-            "home_or_away": f"{home_team} or {away_team}",
+            "home_or_away": "Either Team to Win",
         }
 
         best_option = max(dc_probs, key=dc_probs.get)
@@ -830,11 +810,10 @@ class RecommendationFormatter:
 
 
 def interactive_team_selection(available_teams: list) -> Tuple[str, str]:
+    """Interactive selection of home and away teams from available options."""
     console.print("\n[bold blue]Available Teams:[/bold blue]")
-
     for i, team in enumerate(available_teams, 1):
         console.print(f"[cyan]{i:2d}.[/cyan] {team}")
-
     console.print()
 
     def get_team_choice(prompt: str, exclude_team: str = None) -> str:
@@ -861,7 +840,6 @@ def interactive_team_selection(available_teams: list) -> Tuple[str, str]:
     away_team = get_team_choice(
         "Select AWAY team (enter number)", exclude_team=home_team
     )
-
     return home_team, away_team
 
 
@@ -902,7 +880,7 @@ def analyze(
         strengths = analyzer.calculate_team_strengths()
         win_probs = calculate_win_probabilities(home_xG, away_xG)
 
-        calculators = [
+        calculator_configs = [
             (
                 MatchWinnerCalculator(),
                 "generate_recommendation",
@@ -944,13 +922,14 @@ def analyze(
             ),
         ]
 
-        recommendations = []
-        for calc, method_name, args in calculators:
+        def execute_calculator(config: tuple) -> List[MarketRecommendation]:
+            calc, method_name, args = config
             result = getattr(calc, method_name)(*args)
-            if isinstance(result, tuple):
-                recommendations.extend(result)
-            else:
-                recommendations.append(result)
+            return result if isinstance(result, tuple) else [result]
+
+        recommendations = list(
+            chain.from_iterable(map(execute_calculator, calculator_configs))
+        )
 
         formatter = RecommendationFormatter(console)
         ah_calc = AsianHandicapCalculator()
