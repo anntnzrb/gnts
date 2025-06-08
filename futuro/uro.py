@@ -309,7 +309,7 @@ class OverUnderGoalsCalculator:
                 "expected_total": expected_total,
             }
 
-        return list(map(analyze_line, [0.5, 1.5, 3.5]))
+        return list(map(analyze_line, [0.5 + i*0.25 for i in range(18)]))
 
 
 class BothTeamsScoreCalculator:
@@ -373,7 +373,7 @@ class AsianHandicapCalculator:
 
         def analyze_handicap(handicap: float) -> dict:
             team = home_team if handicap <= 0 else away_team
-            display_handicap = f"{handicap:+.1f}" if handicap != 0 else "0.0"
+            display_handicap = f"{handicap:+.2f}" if handicap != 0 else "0.00"
             effective_advantage = (
                 net_xG_diff if handicap <= 0 else -net_xG_diff
             ) + handicap
@@ -389,7 +389,7 @@ class AsianHandicapCalculator:
                 "confidence": confidence,
             }
 
-        handicaps = [-2.0, -1.5, -1.0, -0.5, 0.0, +0.5, +1.0, +1.5, +2.0]
+        handicaps = [-5.0 + i*0.25 for i in range(41)]
         return list(map(analyze_handicap, handicaps))
 
     def recommend_handicap_bet(
@@ -711,7 +711,6 @@ class RecommendationFormatter:
         table.add_column("Team", justify="left")
         table.add_column("Probability", justify="center")
         table.add_column("Confidence", justify="center")
-        table.add_column("Value", justify="center")
 
         for analysis in handicap_analysis:
             prob = analysis["probability"]
@@ -724,23 +723,12 @@ class RecommendationFormatter:
                 if confidence == "Medium"
                 else "red"
             )
-            value_rating = (
-                "Excellent"
-                if prob > 0.7
-                else "Good"
-                if prob > 0.6
-                else "Fair"
-                if prob > 0.5
-                else "Poor"
-            )
-            value_color = "green" if prob > 0.65 else "yellow" if prob > 0.55 else "red"
 
             table.add_row(
                 analysis["handicap"],
                 analysis["team"],
                 f"{prob:.1%}",
                 f"[{confidence_color}]{confidence}[/{confidence_color}]",
-                f"[{value_color}]{value_rating}[/{value_color}]",
             )
 
         self.console.print(table)
@@ -754,7 +742,6 @@ class RecommendationFormatter:
         table.add_column("Best Bet", justify="center")
         table.add_column("Best Prob", justify="center")
         table.add_column("Confidence", justify="center")
-        table.add_column("Value", justify="center")
 
         for analysis in goals_analysis:
             best_prob = analysis["best_prob"]
@@ -767,18 +754,6 @@ class RecommendationFormatter:
                 if confidence == "Medium"
                 else "red"
             )
-            value_rating = (
-                "Excellent"
-                if best_prob > 0.7
-                else "Good"
-                if best_prob > 0.6
-                else "Fair"
-                if best_prob > 0.5
-                else "Poor"
-            )
-            value_color = (
-                "green" if best_prob > 0.65 else "yellow" if best_prob > 0.55 else "red"
-            )
 
             table.add_row(
                 f"{analysis['line']}",
@@ -787,7 +762,6 @@ class RecommendationFormatter:
                 f"[bold]{analysis['best_bet']} {analysis['line']}[/bold]",
                 f"{best_prob:.1%}",
                 f"[{confidence_color}]{confidence}[/{confidence_color}]",
-                f"[{value_color}]{value_rating}[/{value_color}]",
             )
 
         self.console.print(table)
